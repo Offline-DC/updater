@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        ActivityManager.moveTaskToFront, used to put this screen back on top
+        while the launcher starts (see UpdatingActivity). A normal permission,
+        granted at install.
+    -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+
+    <!-- Lets the timeout fallback see the launcher on API 30+. -->
+    <queries>
+        <package android:name="com.offlineinc.dumbdownlauncher" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="dumb phone updater"
+        android:supportsRtl="false">
+
+        <!--
+            Not exported and no launcher intent filter: nothing on the phone
+            can open it except root (the launcher's install shell runs
+            `su -c am start -n ...`) and the system. No app-drawer icon.
+
+            Its own task, never mixed into the launcher's. NOT
+            excludeFromRecents: Android removes an excluded task as soon as
+            another app comes to the front ("recent-task-trimmed", Gflip6
+            2026-10-28 16:22), which closed this screen while the launcher
+            was still starting behind it. It closes itself with
+            finishAndRemoveTask, so it doesn't stay in recents afterwards.
+            configChanges: every change this screen can handle itself. The
+            flip changes keyboardHidden and navigation, and on 2026-10-28 the
+            screen was recreated right after it went translucent; a recreate
+            mid-update restarts the safety timeout and flashes.
+        -->
+        <activity
+            android:name=".UpdatingActivity"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection|colorMode|fontWeightAdjustment"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.offlineinc.dumbdownlauncher.updater"
+            android:theme="@style/Theme.Updating" />
+
+        <!--
+            Starts this app's process ahead of time, without showing anything:
+            the launcher's install script broadcasts to it while the update is
+            still downloading, so UpdatingActivity opens as a warm start. See
+            WarmReceiver. Not exported and no intent filter, like the activity:
+            only root (`am broadcast -n`) reaches it.
+        -->
+        <receiver
+            android:name=".WarmReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

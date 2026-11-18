@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        On primary/background (#0F0F0F), with the status bar (not full screen
+        since 2026-11-03): the updater hid it and updates v2 shows it, so the
+        hand-back made the bar appear and every line of updates v2 jump down
+        a row's height as the updater closed. Same bar on both = no jump. The
+        layout is centred / bottom-anchored, so it fits the shorter window. The starting window is the
+        same colour as the screen, so the hand-off from it is invisible; the
+        Views draw within a frame or two (no Compose to warm up).
+    -->
+    <style name="Theme.Updating" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/updating_background</item>
+        <item name="android:colorBackground">@color/updating_background</item>
+        <item name="android:statusBarColor">@color/updating_background</item>
+        <item name="android:navigationBarColor">@color/updating_background</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <!--
+            Translucent in the theme only so the activity can switch
+            between opaque and translucent at runtime (Activity
+            setTranslucent needs this). UpdatingActivity makes itself opaque
+            in onCreate and translucent only after the install, on the
+            hold_front intent; see its KDoc. The screen always paints a
+            solid #0F0F0F, so it looks the same either way.
+        -->
+        <item name="android:windowIsTranslucent">true</item>
+    </style>
+</resources>

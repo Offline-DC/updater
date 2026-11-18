@@ -1,0 +1,167 @@
+name: Release
+
+# Every push to main builds the updater and, when updater/build.gradle.kts has a
+# versionCode that hasn't been released yet, publishes it as GitHub Release
+# `v<versionCode>` with the APK attached as `updater.apk`. The newest release is
+# always at:
+#
+#   https://github.com/Offline-DC/updater/releases/latest/download/updater.apk
+#
+# Released by versionCode, not by commit: the launcher (UpdaterAppInstaller) and
+# the phones only ever compare versionCodes, so a second APK under the same
+# versionCode would never reach a phone that already has the first. Changing the
+# screen without bumping versionCode builds and uploads a workflow artifact, but
+# publishes nothing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # Same four secrets as the launcher repo's release.yml, holding the same
+      # values. The updater MUST be signed with the launcher's release key: it's
+      # one package (com.offlineinc.dumbdownlauncher.updater), and a phone that
+      # already has the copy the launcher installed refuses any other key with
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE. So no secrets means no release,
+      # rather than publishing an APK no phone could take.
+      - name: Check signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=()
+          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!v}" ] || missing+=("$v")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing secrets: ${missing[*]}. Copy them from the launcher repo (Settings -> Secrets and variables -> Actions); same values."
+            exit 1
+          fi
+
+      - name: Decode keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/keystore.jks"
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/keystore.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :updater:assembleRelease
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/keystore.jks"
+
+      - name: Locate APK and read its version
+        id: apk
+        run: |
+          set -euo pipefail
+          SRC=$(find updater/build/outputs/apk/release -name "*.apk" | head -1)
+          [ -n "$SRC" ] || { echo "::error::no APK in updater/build/outputs/apk/release"; exit 1; }
+          cp "$SRC" updater.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "bt=$BT" >> "$GITHUB_OUTPUT"
+          CODE=$("$BT/aapt2" dump badging updater.apk | grep -oP "versionCode='\K\d+")
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum updater.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          CERT=$("$BT/apksigner" verify --print-certs updater.apk | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}')
+          [ -n "$CERT" ] || { echo "::error::updater.apk is not signed"; exit 1; }
+          echo "cert=$CERT" >> "$GITHUB_OUTPUT"
+
+      # Compatibility check against what's on phones today: the updater the
+      # latest public launcher release bundles (assets/updater.apk). Same
+      # signing certificate is required, or a phone could never install this
+      # over the launcher's copy (and vice versa). A lower versionCode only
+      # warns: it's harmless (the launcher replaces it with its own on next
+      # start), just not useful.
+      - name: Compare with the updater inside the latest launcher release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BT: ${{ steps.apk.outputs.bt }}
+          CERT: ${{ steps.apk.outputs.cert }}
+          CODE: ${{ steps.apk.outputs.code }}
+        run: |
+          set -euo pipefail
+          mkdir -p ref
+          if ! gh release download -R Offline-DC/dumb-down-launcher --pattern dumb-down-launcher.apk -D ref; then
+            echo "::warning::couldn't download the latest launcher release; skipping the comparison"
+            exit 0
+          fi
+          if ! unzip -p ref/dumb-down-launcher.apk assets/updater.apk > ref/updater.apk || [ ! -s ref/updater.apk ]; then
+            echo "::warning::latest launcher release has no assets/updater.apk; skipping the comparison"
+            exit 0
+          fi
+          REF_CERT=$("$BT/apksigner" verify --print-certs ref/updater.apk | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}')
+          REF_CODE=$("$BT/aapt2" dump badging ref/updater.apk | grep -oP "versionCode='\K\d+")
+          echo "launcher's bundled updater: versionCode=$REF_CODE cert=$REF_CERT"
+          echo "this build:                 versionCode=$CODE cert=$CERT"
+          if [ "$REF_CERT" != "$CERT" ]; then
+            echo "::error::signing certificate differs from the launcher's bundled updater ($REF_CERT). Phones would reject this APK. Check the KEYSTORE_* secrets."
+            exit 1
+          fi
+          if [ "$CODE" -lt "$REF_CODE" ]; then
+            echo "::warning::versionCode $CODE is older than the launcher's bundled updater ($REF_CODE)."
+          fi
+          {
+            echo "### Compatibility"
+            echo ""
+            echo "| | versionCode | signing cert SHA-256 |"
+            echo "|---|---:|---|"
+            echo "| launcher's bundled updater | $REF_CODE | \`$REF_CERT\` |"
+            echo "| this build | $CODE | \`$CERT\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-v${{ steps.apk.outputs.code }}
+          path: updater.apk
+
+      - name: Check whether this versionCode is already released
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.apk.outputs.code }}
+        run: |
+          if gh release view "v$CODE" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "v$CODE is already released; bump versionCode in updater/build.gradle.kts to publish a new one." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.apk.outputs.code }}
+          name: v${{ steps.apk.outputs.code }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: "version_code=${{ steps.apk.outputs.code }}\nsha256=${{ steps.apk.outputs.sha256 }}\ncert_sha256=${{ steps.apk.outputs.cert }}"
+          files: updater.apk

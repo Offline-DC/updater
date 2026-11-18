@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Figma "dumb product design", dp2 loading screen (node 3609:7836). -->
+    <color name="updating_background">#FF0F0F0F</color> <!-- primary/background -->
+    <color name="updating_text_strong">#FFFAFAF0</color> <!-- primary/text-strong -->
+    <color name="updating_text_weak">#FFB4B4AD</color> <!-- primary/text-weak -->
+</resources>
