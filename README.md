@@ -35,8 +35,10 @@ Push to `main`. `.github/workflows/release.yml` builds, signs, verifies and, if
 artifact: phones compare versionCodes, so a new APK under an old versionCode
 would never reach them.
 
-Required repository secrets (copy from the launcher repo, same values):
-`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
+Required repository secrets (same values as the launcher repo):
+`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Set them
+with `./scripts/set-signing-secrets.sh path/to/keystore.jks`, which checks the
+key is the launcher's release key before setting anything.
 
 ## Building locally
 
